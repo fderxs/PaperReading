@@ -297,6 +297,11 @@ def render_html(shortlist: Dict[str, object], output_json_name: str) -> str:
     .tag {{ color: var(--sage-dark); background: var(--sage); }}
     a {{ color: var(--accent-strong); font-weight: 700; text-decoration-thickness: 0.08em; text-underline-offset: 0.18em; }}
     .reason {{ color: var(--muted); margin: 0 0 12px; }}
+    .institution-preview {{
+      margin: 0 0 12px;
+      color: var(--sage-dark);
+      font-size: 0.95rem;
+    }}
     .controls {{ display: grid; grid-template-columns: minmax(160px, 220px) 1fr; gap: 10px; margin: 14px 0; }}
     select, textarea {{
       width: 100%;
@@ -428,6 +433,10 @@ def render_html(shortlist: Dict[str, object], output_json_name: str) -> str:
         reason.className = "reason";
         reason.textContent = paper.reason;
 
+        const institutions = document.createElement("p");
+        institutions.className = "institution-preview";
+        institutions.innerHTML = `<strong>机构：</strong>${{escapeHtml(paper.institutions || "机构待补充；可从 arXiv HTML 或 TeX source 确认。")}}`;
+
         const link = document.createElement("a");
         link.href = paper.pdf_url;
         link.target = "_blank";
@@ -475,7 +484,7 @@ def render_html(shortlist: Dict[str, object], output_json_name: str) -> str:
         `;
         details.append(summary, detail);
 
-        body.append(title, meta, reason, link, controls, details);
+        body.append(title, meta, reason, institutions, link, controls, details);
         card.append(status, body);
         list.append(card);
       }});
