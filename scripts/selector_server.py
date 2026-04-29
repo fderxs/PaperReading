@@ -108,12 +108,25 @@ def find_latest_selector_html(run_dir: Path) -> Path:
 
 class SelectorRequestHandler(SimpleHTTPRequestHandler):
     run_dir: Path
+    root_dir: Path
 
     def do_GET(self) -> None:
         if self.path.startswith("/selection-status"):
             self._handle_selection_status()
             return
+        if self.path.startswith("/reading-status"):
+            self._handle_reading_status()
+            return
+        if self.path.startswith("/papers/"):
+            self._handle_paper_file()
+            return
         super().do_GET()
+
+    def do_HEAD(self) -> None:
+        if self.path.startswith("/papers/"):
+            self._handle_paper_file(send_body=False)
+            return
+        super().do_HEAD()
 
     def _handle_selection_status(self) -> None:
         try:
@@ -137,7 +150,58 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
+    def _handle_reading_status(self) -> None:
+        try:
+            query = parse_qs(urlparse(self.path).query)
+            arxiv_date = validate_arxiv_scope(query.get("arxiv_date", [""])[0])
+            status_path = self.run_dir / f"reading_status_{arxiv_date}.json"
+            status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.exists() else {}
+            body = json.dumps(
+                {"ok": True, "exists": status_path.exists(), "path": str(status_path), "status": status},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            body = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8")
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def _handle_paper_file(self, send_body: bool = True) -> None:
+        try:
+            raw_name = Path(urlparse(self.path).path).name
+            if not raw_name.endswith(".pdf") or raw_name != Path(raw_name).name:
+                raise ValueError("Invalid PDF filename")
+            pdf_path = (self.root_dir / "papers" / raw_name).resolve()
+            papers_dir = (self.root_dir / "papers").resolve()
+            if pdf_path.parent != papers_dir or not pdf_path.exists():
+                raise FileNotFoundError(raw_name)
+            data_size = pdf_path.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(data_size))
+            self.end_headers()
+            if not send_body:
+                return
+            with pdf_path.open("rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except Exception as exc:
+            self.send_error(404, str(exc))
+
     def do_POST(self) -> None:
+        if self.path == "/save-reading-status":
+            self._handle_save_reading_status()
+            return
         if self.path != "/save-selection":
             self.send_error(404, "Unknown endpoint")
             return
@@ -165,13 +229,61 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _handle_save_reading_status(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            arxiv_date = validate_arxiv_scope(payload.get("arxiv_date"))
+            raw_read_papers = payload.get("read_papers", [])
+            if not isinstance(raw_read_papers, list):
+                raise ValueError("read_papers must be a list")
 
-def make_handler(run_dir: Path) -> type[SelectorRequestHandler]:
+            read_papers: List[Dict[str, object]] = []
+            for raw in raw_read_papers:
+                if not isinstance(raw, dict):
+                    raise ValueError("Each read paper must be an object")
+                read_papers.append(
+                    {
+                        "reading_id": str(raw.get("reading_id") or "").strip(),
+                        "selector_id": str(raw.get("selector_id") or raw.get("paper_id") or "").strip(),
+                        "arxiv_id": str(raw.get("arxiv_id") or "").strip(),
+                        "read": bool(raw.get("read")),
+                        "read_at": str(raw.get("read_at") or "").strip(),
+                    }
+                )
+
+            normalized = {
+                "run_date": str(payload.get("run_date") or self.run_dir.name).strip() or self.run_dir.name,
+                "arxiv_date": arxiv_date,
+                "updated_at": str(payload.get("updated_at") or "").strip(),
+                "read_papers": read_papers,
+            }
+            output_path = self.run_dir / f"reading_status_{arxiv_date}.json"
+            write_json_atomic(output_path, normalized)
+        except Exception as exc:
+            body = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8")
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        body = json.dumps({"ok": True, "path": str(output_path)}, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def make_handler(run_dir: Path, root_dir: Path) -> type[SelectorRequestHandler]:
     class Handler(SelectorRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(run_dir), **kwargs)
 
     Handler.run_dir = run_dir
+    Handler.root_dir = root_dir
     return Handler
 
 
@@ -186,10 +298,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     run_dir = args.run_dir.resolve()
+    root_dir = run_dir.parent.parent if run_dir.parent.name == "runs" else Path.cwd().resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     selector_html = find_latest_selector_html(run_dir)
 
-    handler = make_handler(run_dir)
+    handler = make_handler(run_dir, root_dir)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     url = f"http://{args.host}:{args.port}/{selector_html.name}"
     print(f"Serving selector directory: {run_dir}")

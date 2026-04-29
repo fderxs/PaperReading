@@ -60,9 +60,26 @@ PY
 )"
 
 HTML_NAME="$(basename "$HTML_PATH")"
+READING_HTML_PATH="$("$PYTHON_BIN" - "$RUN_DIR" <<'PY'
+import sys
+from pathlib import Path
+
+run_dir = Path(sys.argv[1])
+matches = sorted(
+    run_dir.glob("reading_dashboard_*.html"),
+    key=lambda path: (path.stat().st_mtime, path.name),
+)
+print(matches[-1].name if matches else "")
+PY
+)"
 
 echo "Selector URL:"
 echo "http://127.0.0.1:$SELECTOR_PORT/$HTML_NAME"
+if [[ -n "$READING_HTML_PATH" ]]; then
+  echo
+  echo "Reading dashboard URL:"
+  echo "http://127.0.0.1:$SELECTOR_PORT/$READING_HTML_PATH"
+fi
 echo
 echo "Keep this terminal open while selecting papers. Press Ctrl-C after saving."
 

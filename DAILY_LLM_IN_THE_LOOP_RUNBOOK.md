@@ -169,6 +169,9 @@ papers/*.pdf
 runs/YYYY-MM-DD/selection_record_<arxiv-scope>.json
 runs/YYYY-MM-DD/analyses/*.md
 runs/YYYY-MM-DD/llm_analysis_task_<arxiv-scope>.md
+runs/YYYY-MM-DD/reading_dashboard_<arxiv-scope>.html
+runs/YYYY-MM-DD/reading_manifest_<arxiv-scope>.json
+runs/YYYY-MM-DD/reading_status_<arxiv-scope>.json
 ```
 
 如果 PDF 下载因为网络失败而停止，Codex 应说明失败论文，并请求重新运行或跳过。
@@ -253,6 +256,28 @@ runs/YYYY-MM-DD/analyses/*.md
 runs/YYYY-MM-DD/figures/
 ```
 
+### 8. 打开交互式阅读台
+
+精读分析完成后，Codex 可继续使用同一个本地 server：
+
+```bash
+./serve_selector.sh --run-dir runs/YYYY-MM-DD
+```
+
+然后让用户打开：
+
+```text
+http://127.0.0.1:8765/reading_dashboard_<arxiv-scope>.html
+```
+
+阅读台左侧显示用户选中的论文列表，包括统一阅读 ID、原 selector ID、arXiv ID、优先级和已读勾选。用户点击论文后，右侧阅读界面左栏显示对应 `analyses/*.md`，右栏显示本地 PDF 原文。已读状态会保存在：
+
+```text
+runs/YYYY-MM-DD/reading_status_<arxiv-scope>.json
+```
+
+用户后续提问时可直接引用阅读 ID，例如 `R03`。
+
 ## 完成时汇报
 
 流程完成后，Codex 应简要汇报：
@@ -262,6 +287,7 @@ runs/YYYY-MM-DD/figures/
 - 用户最终选择数量。
 - 已下载 PDF 数量。
 - 已生成或更新的分析文件位置。
+- 阅读台 HTML 和阅读状态 JSON 位置。
 - 是否存在未完成项或需要用户确认的问题。
 
 ## 常用触发语

@@ -46,7 +46,7 @@ Codex 会生成或更新 `shortlist_vla_planning_<arxiv-scope>.json`，并渲染
 ./process_selected_papers.sh --run-dir runs/YYYY-MM-DD
 ```
 
-脚本会记录偏好、下载 PDF、创建分析文件，并生成 `llm_analysis_task_<arxiv-scope>.md`。
+脚本会记录偏好、下载 PDF、创建分析文件，并生成 `llm_analysis_task_<arxiv-scope>.md`。同时会生成 `reading_dashboard_<arxiv-scope>.html`、`reading_manifest_<arxiv-scope>.json` 和 `reading_status_<arxiv-scope>.json`，用于后续交互式阅读。
 
 5. 抽取 PDF 图表与表格：
 
@@ -75,6 +75,14 @@ Codex 会生成或更新 `shortlist_vla_planning_<arxiv-scope>.json`，并渲染
 ```
 
 Codex 会基于 PDF、你的备注和模板补全 `runs/YYYY-MM-DD/analyses/` 中的逐篇分析。
+
+7. 打开阅读台：
+
+```bash
+./serve_selector.sh --run-dir runs/YYYY-MM-DD
+```
+
+在浏览器中打开 `reading_dashboard_<arxiv-scope>.html`。页面左侧是已选论文列表和阅读 ID，右侧阅读界面左栏显示分析 Markdown、右栏显示 PDF 原文；勾选“已读”会保存到 `reading_status_<arxiv-scope>.json`。
 
 ## 目录约定
 

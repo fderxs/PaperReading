@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.request import Request, urlopen
 
+from render_reading_dashboard import write_reading_dashboard
+
 
 USER_AGENT = "paperreading-post-selection/1.0 (+https://arxiv.org)"
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -374,6 +376,7 @@ def main() -> int:
         selection_record_path,
         analysis_items,
     )
+    reading_paths = write_reading_dashboard(root, run_dir, arxiv_date, analysis_items)
 
     print(f"Run dir: {run_dir}")
     print(f"Selection: {selection_path}")
@@ -382,6 +385,9 @@ def main() -> int:
     print(f"Downloaded/checked PDFs: {len(selected_records)} in {papers_dir}")
     print(f"Analysis files: {len(analysis_paths)}")
     print(f"LLM analysis task: {analysis_task_path}")
+    print(f"Reading dashboard: {reading_paths['dashboard']}")
+    print(f"Reading manifest: {reading_paths['manifest']}")
+    print(f"Reading status: {reading_paths['status']}")
     for path in analysis_paths:
         print(f"- {path}")
     return 0
