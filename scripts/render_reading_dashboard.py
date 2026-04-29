@@ -17,6 +17,21 @@ def reading_id(index: int) -> str:
     return f"R{index:02d}"
 
 
+def find_cn_pdf(run_dir: Path, read_id: str, arxiv_id: str) -> str:
+    paper_cn_dir = run_dir / "paper_cn"
+    candidates = [
+        paper_cn_dir / f"{read_id}_{arxiv_id}" / "paper_cn.pdf",
+        paper_cn_dir / f"{read_id}_{arxiv_id}" / "translated.pdf",
+        paper_cn_dir / f"{read_id}_{arxiv_id}" / f"{arxiv_id}_cn.pdf",
+        paper_cn_dir / arxiv_id / "paper_cn.pdf",
+        paper_cn_dir / arxiv_id / f"{arxiv_id}_cn.pdf",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return relpath(candidate.resolve(), run_dir.resolve())
+    return ""
+
+
 def build_manifest(
     root: Path,
     run_dir: Path,
@@ -28,17 +43,20 @@ def build_manifest(
         record = item["record"]
         pdf_path = Path(str(item["pdf_path"])).resolve()
         analysis_path = Path(str(item["analysis_path"])).resolve()
+        read_id = reading_id(index)
+        arxiv_id = str(record.get("arxiv_id", ""))
         papers.append(
             {
-                "reading_id": reading_id(index),
+                "reading_id": read_id,
                 "selector_id": str(record.get("paper_id", "")),
-                "arxiv_id": str(record.get("arxiv_id", "")),
+                "arxiv_id": arxiv_id,
                 "title": str(record.get("title", "")),
                 "priority": str(record.get("priority", "")),
                 "notes": str(record.get("notes", "")),
                 "tags": list(record.get("tags", [])),
                 "pdf_path": relpath(pdf_path, run_dir),
                 "analysis_path": relpath(analysis_path, run_dir),
+                "cn_pdf_path": find_cn_pdf(run_dir, read_id, arxiv_id),
                 "pdf_file": pdf_path.name,
                 "analysis_file": analysis_path.name,
             }
@@ -152,6 +170,24 @@ def render_html(manifest: Dict[str, object]) -> str:
       background: #e2f2e8;
     }}
     .paper-row.read .row-title {{ color: #4f675b; }}
+    .paper-row.intensive {{
+      border-color: #124c36;
+      background: linear-gradient(135deg, #174c38, #0f3c2f);
+      color: #f4fff8;
+      box-shadow: 0 12px 28px rgba(15, 60, 47, 0.18);
+    }}
+    .paper-row.intensive:hover, .paper-row.intensive.active {{
+      border-color: #72c49a;
+      background: linear-gradient(135deg, #1d5c44, #124635);
+    }}
+    .paper-row.intensive .row-id,
+    .paper-row.intensive .row-title,
+    .paper-row.intensive .row-meta {{ color: #f4fff8; }}
+    .paper-row.intensive .pill {{
+      background: rgba(255, 255, 255, 0.14);
+      color: #f4fff8;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }}
     .row-body {{
       min-height: 0;
       display: flex;
@@ -202,6 +238,13 @@ def render_html(manifest: Dict[str, object]) -> str:
       gap: 10px;
       min-width: 0;
     }}
+    .toolbar-left {{
+      flex: 1 1 auto;
+    }}
+    .toolbar-right {{
+      flex: 0 0 auto;
+      margin-left: auto;
+    }}
     .toolbar-button {{
       min-height: 32px;
       border: 1px solid var(--line);
@@ -227,6 +270,33 @@ def render_html(manifest: Dict[str, object]) -> str:
       background: var(--accent-soft);
       color: var(--accent);
     }}
+    .toolbar-button.intensive {{
+      border-color: #124c36;
+      background: #124c36;
+      color: white;
+    }}
+    .view-toggle {{
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      overflow: hidden;
+      background: white;
+    }}
+    .view-toggle button {{
+      min-height: 32px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px 10px;
+      font: inherit;
+    }}
+    .view-toggle button:last-child {{ border-right: 0; }}
+    .view-toggle button.active {{
+      background: var(--accent);
+      color: white;
+    }}
     .reader-grid {{
       display: grid;
       grid-template-columns: minmax(360px, 48%) minmax(360px, 52%);
@@ -241,6 +311,7 @@ def render_html(manifest: Dict[str, object]) -> str:
     .current-id {{ color: var(--accent); font-weight: 800; }}
     .read-state {{ background: #f1f3f1; color: #56625d; }}
     .read-state.done {{ background: var(--accent-soft); color: var(--accent); }}
+    .intensive-state {{ background: #124c36; color: white; }}
     #analysis {{
       height: 100%;
       overflow: auto;
@@ -266,6 +337,74 @@ def render_html(manifest: Dict[str, object]) -> str:
       height: 100%;
       border: 0;
       background: #e8ece9;
+    }}
+    #cnPdfFrame {{ background: #f1f5f2; }}
+    .cn-annotator {{
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      background: #eef2ef;
+    }}
+    .note-toolbar {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfa;
+      flex-wrap: wrap;
+    }}
+    .note-toolbar button {{
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      color: var(--ink);
+      cursor: pointer;
+      padding: 4px 9px;
+      font: inherit;
+      white-space: nowrap;
+    }}
+    .note-toolbar button.active {{
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+    }}
+    .note-toolbar button.save {{
+      border-color: #124c36;
+      background: #124c36;
+      color: white;
+    }}
+    .note-status {{
+      color: var(--muted);
+      font-size: 0.82rem;
+      min-width: 120px;
+    }}
+    .cn-pages {{
+      flex: 1 1 auto;
+      overflow: auto;
+      padding: 14px;
+    }}
+    .cn-page {{
+      position: relative;
+      margin: 0 auto 18px;
+      background: white;
+      box-shadow: 0 10px 28px rgba(31, 37, 40, 0.16);
+      line-height: 0;
+    }}
+    .cn-page canvas {{
+      display: block;
+    }}
+    .cn-page img {{
+      display: block;
+      width: 100%;
+      height: 100%;
+    }}
+    .cn-annotation-layer {{
+      position: absolute;
+      inset: 0;
+      cursor: crosshair;
     }}
     .empty {{
       padding: 30px;
@@ -303,26 +442,54 @@ def render_html(manifest: Dict[str, object]) -> str:
       <div class="toolbar-left">
         <button id="backToList" class="toolbar-button" type="button">返回列表</button>
         <span class="current-id" id="readerId">--</span>
+        <div class="view-toggle" aria-label="左侧面板">
+          <button id="analysisMode" class="active" type="button">分析</button>
+          <button id="cnPdfMode" type="button">中文PDF</button>
+        </div>
       </div>
       <div class="toolbar-right">
         <button id="readToggle" class="toolbar-button primary" type="button">标记已读</button>
+        <button id="intensiveToggle" class="toolbar-button" type="button">精读</button>
         <a id="sourceLink" class="toolbar-button" href="#" target="_blank" rel="noopener">打开源文件</a>
       </div>
     </div>
     <div class="reader-grid">
       <section class="reader-pane">
         <article id="analysis"><div class="empty">从列表选择一篇论文开始阅读。</div></article>
+        <iframe id="cnPdfFrame" class="hidden" title="中文 PDF"></iframe>
+        <div id="cnAnnotator" class="cn-annotator hidden">
+          <div class="note-toolbar">
+            <button id="noteTool" class="active" type="button">文字便签</button>
+            <button id="highlightTool" type="button">高亮框</button>
+            <button id="saveCnPdf" class="save" type="button">保存到PDF</button>
+            <button id="clearCnNotes" type="button">清空未保存</button>
+            <span id="cnNoteStatus" class="note-status"></span>
+          </div>
+          <div id="cnPages" class="cn-pages"></div>
+        </div>
+        <div id="cnEmpty" class="empty hidden"></div>
       </section>
       <section class="pdf-pane">
         <iframe id="pdfFrame" title="PDF"></iframe>
       </section>
     </div>
   </main>
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script>
     const manifest = {manifest_json};
     const storageKey = `paper-reading-status:${{manifest.run_date}}:${{manifest.arxiv_date}}`;
     let status = loadStatus();
     let current = null;
+    let leftMode = "analysis";
+    let cnState = {{
+      paperKey: "",
+      pdfBytes: null,
+      pdfDocument: null,
+      annotations: [],
+      pages: [],
+      tool: "note",
+      drawing: null
+    }};
 
     const listView = document.querySelector("#listView");
     const readerView = document.querySelector("#readerView");
@@ -335,6 +502,15 @@ def render_html(manifest: Dict[str, object]) -> str:
     document.querySelector("#readToggle").addEventListener("click", () => {{
       if (current) setRead(current, !isRead(current));
     }});
+    document.querySelector("#intensiveToggle").addEventListener("click", () => {{
+      if (current) setIntensive(current, !isIntensive(current));
+    }});
+    document.querySelector("#analysisMode").addEventListener("click", () => setLeftMode("analysis"));
+    document.querySelector("#cnPdfMode").addEventListener("click", () => setLeftMode("cn"));
+    document.querySelector("#noteTool").addEventListener("click", () => setNoteTool("note"));
+    document.querySelector("#highlightTool").addEventListener("click", () => setNoteTool("highlight"));
+    document.querySelector("#saveCnPdf").addEventListener("click", saveCnPdfNotes);
+    document.querySelector("#clearCnNotes").addEventListener("click", clearCnNotes);
 
     function loadStatus() {{
       try {{ return JSON.parse(localStorage.getItem(storageKey) || "{{}}"); }}
@@ -350,7 +526,12 @@ def render_html(manifest: Dict[str, object]) -> str:
         const result = await response.json();
         if (response.ok && result.ok && result.status && Array.isArray(result.status.read_papers)) {{
           for (const item of result.status.read_papers) {{
-            if (item.reading_id) status[item.reading_id] = {{ read: Boolean(item.read), read_at: item.read_at || "" }};
+            if (item.reading_id) status[item.reading_id] = {{
+              read: Boolean(item.read),
+              read_at: item.read_at || "",
+              intensive: Boolean(item.intensive),
+              intensive_at: item.intensive_at || ""
+            }};
           }}
           saveLocalStatus();
           renderList();
@@ -363,7 +544,9 @@ def render_html(manifest: Dict[str, object]) -> str:
         selector_id: paper.selector_id || "",
         arxiv_id: paper.arxiv_id,
         read: Boolean(status[paper.reading_id]?.read),
-        read_at: status[paper.reading_id]?.read_at || ""
+        read_at: status[paper.reading_id]?.read_at || "",
+        intensive: Boolean(status[paper.reading_id]?.intensive),
+        intensive_at: status[paper.reading_id]?.intensive_at || ""
       }}));
       try {{
         await fetch("/save-reading-status", {{
@@ -379,19 +562,345 @@ def render_html(manifest: Dict[str, object]) -> str:
       }} catch (_) {{}}
     }}
     function setRead(paper, read) {{
-      status[paper.reading_id] = {{ read, read_at: read ? new Date().toISOString() : "" }};
+      const prior = status[paper.reading_id] || {{}};
+      status[paper.reading_id] = {{ ...prior, read, read_at: read ? new Date().toISOString() : "" }};
       saveLocalStatus();
       saveServerStatus();
       renderList();
       if (current && current.reading_id === paper.reading_id) renderReadToggle();
     }}
     function isRead(paper) {{ return Boolean(status[paper.reading_id]?.read); }}
+    function setIntensive(paper, intensive) {{
+      const prior = status[paper.reading_id] || {{}};
+      status[paper.reading_id] = {{
+        ...prior,
+        intensive,
+        intensive_at: intensive ? new Date().toISOString() : ""
+      }};
+      saveLocalStatus();
+      saveServerStatus();
+      renderList();
+      if (current && current.reading_id === paper.reading_id) renderIntensiveToggle();
+    }}
+    function isIntensive(paper) {{ return Boolean(status[paper.reading_id]?.intensive); }}
     function renderReadToggle() {{
       const button = document.querySelector("#readToggle");
       const read = current ? isRead(current) : false;
       button.textContent = read ? "已读" : "标记已读";
       button.classList.toggle("read", read);
       button.classList.toggle("primary", !read);
+    }}
+    function renderIntensiveToggle() {{
+      const button = document.querySelector("#intensiveToggle");
+      const intensive = current ? isIntensive(current) : false;
+      button.textContent = intensive ? "精读中" : "精读";
+      button.classList.toggle("intensive", intensive);
+    }}
+    function renderLeftMode() {{
+      document.querySelector("#analysisMode").classList.toggle("active", leftMode === "analysis");
+      document.querySelector("#cnPdfMode").classList.toggle("active", leftMode === "cn");
+      const analysis = document.querySelector("#analysis");
+      const cnPdf = document.querySelector("#cnPdfFrame");
+      const cnAnnotator = document.querySelector("#cnAnnotator");
+      const cnEmpty = document.querySelector("#cnEmpty");
+      analysis.classList.toggle("hidden", leftMode !== "analysis");
+      cnPdf.classList.add("hidden");
+      cnAnnotator.classList.add("hidden");
+      cnEmpty.classList.add("hidden");
+      if (leftMode === "cn" && current) {{
+        if (current.cn_pdf_path) {{
+          cnPdf.removeAttribute("src");
+          cnAnnotator.classList.remove("hidden");
+          loadCnAnnotator(current);
+        }} else {{
+          cnPdf.removeAttribute("src");
+          cnEmpty.classList.remove("hidden");
+          cnEmpty.textContent = `${{current.reading_id}} 还没有生成中文 PDF。执行“继续指令”处理精读论文后会出现在这里。`;
+        }}
+      }}
+    }}
+    function setLeftMode(mode) {{
+      leftMode = mode;
+      renderLeftMode();
+    }}
+    function cnStorageKey() {{
+      return current ? `paper-cn-notes:${{manifest.run_date}}:${{manifest.arxiv_date}}:${{current.reading_id}}` : "";
+    }}
+    function setNoteStatus(message) {{
+      document.querySelector("#cnNoteStatus").textContent = message || "";
+    }}
+    function setNoteTool(tool) {{
+      cnState.tool = tool;
+      document.querySelector("#noteTool").classList.toggle("active", tool === "note");
+      document.querySelector("#highlightTool").classList.toggle("active", tool === "highlight");
+      setNoteStatus(tool === "note" ? "点击页面添加文字便签" : "拖拽页面添加高亮框");
+    }}
+    function loadStoredAnnotations() {{
+      try {{ return JSON.parse(localStorage.getItem(cnStorageKey()) || "[]"); }}
+      catch (_) {{ return []; }}
+    }}
+    function storeAnnotations() {{
+      if (!current) return;
+      localStorage.setItem(cnStorageKey(), JSON.stringify(cnState.annotations));
+    }}
+    async function loadCnAnnotator(paper) {{
+      if (!window.PDFLib) {{
+        setNoteStatus("PDF 保存组件加载失败，请检查网络或刷新页面。");
+        return;
+      }}
+      const paperKey = `${{paper.reading_id}}:${{paper.cn_pdf_path}}`;
+      if (cnState.paperKey === paperKey && cnState.pdfDocument) {{
+        renderAllAnnotationLayers();
+        return;
+      }}
+      cnState = {{
+        ...cnState,
+        paperKey,
+        pdfBytes: null,
+        pdfDocument: null,
+        annotations: loadStoredAnnotations(),
+        pages: [],
+        drawing: null
+      }};
+      const pages = document.querySelector("#cnPages");
+      pages.innerHTML = `<div class="empty">正在加载中文 PDF...</div>`;
+      setNoteStatus("");
+      try {{
+        const response = await fetch(paper.cn_pdf_path, {{ cache: "no-store" }});
+        if (!response.ok) throw new Error(`HTTP ${{response.status}}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        cnState.pdfBytes = bytes;
+        const infoResponse = await fetch(`/cn-pdf-info?path=${{encodeURIComponent(paper.cn_pdf_path)}}`, {{ cache: "no-store" }});
+        const info = await infoResponse.json();
+        if (!infoResponse.ok || !info.ok) throw new Error(info.error || `HTTP ${{infoResponse.status}}`);
+        cnState.pdfDocument = info;
+        await renderCnPages();
+        setNoteTool(cnState.tool);
+      }} catch (error) {{
+        pages.innerHTML = `<div class="empty">无法加载中文 PDF：${{escapeHtml(error.message)}}<br>${{escapeHtml(paper.cn_pdf_path)}}</div>`;
+      }}
+    }}
+    async function renderCnPages() {{
+      const pages = document.querySelector("#cnPages");
+      pages.innerHTML = "";
+      cnState.pages = [];
+      const maxWidth = Math.max(320, pages.clientWidth - 28);
+      for (let pageIndex = 0; pageIndex < cnState.pdfDocument.page_count; pageIndex += 1) {{
+        const pageMeta = cnState.pdfDocument.pages[pageIndex] || {{}};
+        const pageWidth = Number(pageMeta.width || 612);
+        const zoom = Math.min(1.55, Math.max(0.7, maxWidth / pageWidth));
+        const wrapper = document.createElement("div");
+        wrapper.className = "cn-page";
+        const image = document.createElement("img");
+        image.alt = `中文 PDF 第 ${{pageIndex + 1}} 页`;
+        image.src = `/cn-pdf-page?path=${{encodeURIComponent(current.cn_pdf_path)}}&page=${{pageIndex}}&zoom=${{zoom.toFixed(3)}}&v=${{Date.now()}}`;
+        const layer = document.createElement("canvas");
+        layer.className = "cn-annotation-layer";
+        layer.dataset.pageIndex = String(pageIndex);
+        wrapper.append(image, layer);
+        pages.append(wrapper);
+        await new Promise((resolve, reject) => {{
+          image.onload = resolve;
+          image.onerror = () => reject(new Error(`无法渲染第 ${{pageIndex + 1}} 页`));
+        }});
+        wrapper.style.width = `${{image.naturalWidth}}px`;
+        wrapper.style.height = `${{image.naturalHeight}}px`;
+        layer.width = image.naturalWidth;
+        layer.height = image.naturalHeight;
+        cnState.pages.push({{ pageIndex, layer, width: layer.width, height: layer.height }});
+        attachAnnotationEvents(layer);
+      }}
+      renderAllAnnotationLayers();
+    }}
+    function attachAnnotationEvents(layer) {{
+      layer.addEventListener("pointerdown", (event) => {{
+        if (cnState.tool === "note") {{
+          const point = layerPoint(layer, event);
+          const text = prompt("输入这条笔记：");
+          if (!text || !text.trim()) return;
+          cnState.annotations.push({{
+            type: "note",
+            pageIndex: Number(layer.dataset.pageIndex),
+            x: point.x / layer.width,
+            y: point.y / layer.height,
+            text: text.trim()
+          }});
+          storeAnnotations();
+          renderAllAnnotationLayers();
+          setNoteStatus("已添加文字便签，点击“保存到PDF”写回文件");
+          return;
+        }}
+        const point = layerPoint(layer, event);
+        cnState.drawing = {{
+          pageIndex: Number(layer.dataset.pageIndex),
+          layer,
+          startX: point.x,
+          startY: point.y,
+          endX: point.x,
+          endY: point.y
+        }};
+        layer.setPointerCapture(event.pointerId);
+      }});
+      layer.addEventListener("pointermove", (event) => {{
+        if (!cnState.drawing || cnState.drawing.layer !== layer) return;
+        const point = layerPoint(layer, event);
+        cnState.drawing.endX = point.x;
+        cnState.drawing.endY = point.y;
+        renderAllAnnotationLayers();
+        drawHighlight(layer, cnState.drawing.startX, cnState.drawing.startY, cnState.drawing.endX, cnState.drawing.endY);
+      }});
+      layer.addEventListener("pointerup", (event) => {{
+        if (!cnState.drawing || cnState.drawing.layer !== layer) return;
+        const drawing = cnState.drawing;
+        cnState.drawing = null;
+        const x = Math.min(drawing.startX, drawing.endX);
+        const y = Math.min(drawing.startY, drawing.endY);
+        const w = Math.abs(drawing.endX - drawing.startX);
+        const h = Math.abs(drawing.endY - drawing.startY);
+        if (w < 8 || h < 8) {{
+          renderAllAnnotationLayers();
+          return;
+        }}
+        cnState.annotations.push({{
+          type: "highlight",
+          pageIndex: drawing.pageIndex,
+          x: x / layer.width,
+          y: y / layer.height,
+          w: w / layer.width,
+          h: h / layer.height
+        }});
+        storeAnnotations();
+        renderAllAnnotationLayers();
+        setNoteStatus("已添加高亮框，点击“保存到PDF”写回文件");
+        try {{ layer.releasePointerCapture(event.pointerId); }} catch (_) {{}}
+      }});
+    }}
+    function layerPoint(layer, event) {{
+      const rect = layer.getBoundingClientRect();
+      return {{
+        x: Math.max(0, Math.min(layer.width, (event.clientX - rect.left) * layer.width / rect.width)),
+        y: Math.max(0, Math.min(layer.height, (event.clientY - rect.top) * layer.height / rect.height))
+      }};
+    }}
+    function renderAllAnnotationLayers() {{
+      for (const page of cnState.pages) {{
+        const ctx = page.layer.getContext("2d");
+        ctx.clearRect(0, 0, page.width, page.height);
+        for (const annotation of cnState.annotations.filter((item) => item.pageIndex === page.pageIndex)) {{
+          drawAnnotation(ctx, page.width, page.height, annotation);
+        }}
+      }}
+    }}
+    function drawHighlight(layer, x1, y1, x2, y2) {{
+      const ctx = layer.getContext("2d");
+      ctx.save();
+      ctx.fillStyle = "rgba(255, 221, 73, 0.32)";
+      ctx.strokeStyle = "rgba(166, 118, 0, 0.75)";
+      ctx.lineWidth = 2;
+      ctx.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+      ctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+      ctx.restore();
+    }}
+    function drawAnnotation(ctx, width, height, annotation) {{
+      if (annotation.type === "highlight") {{
+        drawHighlight(ctx.canvas, annotation.x * width, annotation.y * height, (annotation.x + annotation.w) * width, (annotation.y + annotation.h) * height);
+        return;
+      }}
+      const x = annotation.x * width;
+      const y = annotation.y * height;
+      const boxWidth = Math.min(260, Math.max(150, width - x - 12));
+      const lines = wrapCanvasText(ctx, annotation.text || "", boxWidth - 16);
+      const lineHeight = 18;
+      const boxHeight = Math.max(34, lines.length * lineHeight + 14);
+      ctx.save();
+      ctx.fillStyle = "rgba(255, 246, 173, 0.92)";
+      ctx.strokeStyle = "rgba(116, 88, 0, 0.85)";
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(x, y, boxWidth, boxHeight);
+      ctx.strokeRect(x, y, boxWidth, boxHeight);
+      ctx.fillStyle = "#2f2b16";
+      ctx.font = "14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.textBaseline = "top";
+      lines.forEach((line, index) => ctx.fillText(line, x + 8, y + 7 + index * lineHeight));
+      ctx.restore();
+    }}
+    function wrapCanvasText(ctx, text, maxWidth) {{
+      ctx.font = "14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      const lines = [];
+      let currentLine = "";
+      for (const char of text) {{
+        const nextLine = currentLine + char;
+        if (currentLine && ctx.measureText(nextLine).width > maxWidth) {{
+          lines.push(currentLine);
+          currentLine = char;
+        }} else {{
+          currentLine = nextLine;
+        }}
+      }}
+      if (currentLine) lines.push(currentLine);
+      return lines.slice(0, 8);
+    }}
+    async function saveCnPdfNotes() {{
+      if (!current || !current.cn_pdf_path || !cnState.pdfBytes) return;
+      if (!cnState.annotations.length) {{
+        setNoteStatus("没有未保存的标注");
+        return;
+      }}
+      try {{
+        setNoteStatus("正在写入 PDF...");
+        const pdfDoc = await PDFLib.PDFDocument.load(cnState.pdfBytes);
+        const pages = pdfDoc.getPages();
+        for (const pageInfo of cnState.pages) {{
+          const pageAnnotations = cnState.annotations.filter((item) => item.pageIndex === pageInfo.pageIndex);
+          if (!pageAnnotations.length) continue;
+          const overlay = document.createElement("canvas");
+          overlay.width = pageInfo.width;
+          overlay.height = pageInfo.height;
+          const ctx = overlay.getContext("2d");
+          pageAnnotations.forEach((annotation) => drawAnnotation(ctx, overlay.width, overlay.height, annotation));
+          const pngBytes = await canvasToPngBytes(overlay);
+          const png = await pdfDoc.embedPng(pngBytes);
+          const page = pages[pageInfo.pageIndex];
+          page.drawImage(png, {{ x: 0, y: 0, width: page.getWidth(), height: page.getHeight() }});
+        }}
+        const savedBytes = await pdfDoc.save();
+        const response = await fetch("/save-cn-pdf", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json;charset=utf-8" }},
+          body: JSON.stringify({{ path: current.cn_pdf_path, pdf_base64: bytesToBase64(savedBytes) }})
+        }});
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${{response.status}}`);
+        cnState.pdfBytes = new Uint8Array(savedBytes);
+        cnState.pdfDocument = null;
+        cnState.paperKey = "";
+        cnState.annotations = [];
+        storeAnnotations();
+        await loadCnAnnotator(current);
+        setNoteStatus(`已保存到本地 PDF，备份：${{result.backup_path || ""}}`);
+      }} catch (error) {{
+        setNoteStatus(`保存失败：${{error.message}}`);
+      }}
+    }}
+    async function canvasToPngBytes(canvas) {{
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      return new Uint8Array(await blob.arrayBuffer());
+    }}
+    function bytesToBase64(bytes) {{
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {{
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }}
+      return btoa(binary);
+    }}
+    function clearCnNotes() {{
+      if (!cnState.annotations.length) return;
+      if (!confirm("清空当前未保存的 PDF 标注？已写入 PDF 的内容不会被删除。")) return;
+      cnState.annotations = [];
+      storeAnnotations();
+      renderAllAnnotationLayers();
+      setNoteStatus("未保存标注已清空");
     }}
     function renderProgress() {{
       const readCount = manifest.papers.filter(isRead).length;
@@ -407,10 +916,11 @@ def render_html(manifest: Dict[str, object]) -> str:
       }});
       for (const paper of rows) {{
         const row = document.createElement("div");
-        row.className = `paper-row${{paper === current ? " active" : ""}}${{isRead(paper) ? " read" : ""}}`;
+        row.className = `paper-row${{paper === current ? " active" : ""}}${{isRead(paper) ? " read" : ""}}${{isIntensive(paper) ? " intensive" : ""}}`;
         const body = document.createElement("div");
         body.className = "row-body";
         const read = isRead(paper);
+        const intensive = isIntensive(paper);
         body.innerHTML = `
           <div class="row-id">${{escapeHtml(paper.reading_id)}} · arXiv:${{escapeHtml(paper.arxiv_id)}}</div>
           <div class="row-title">${{escapeHtml(paper.title)}}</div>
@@ -418,6 +928,7 @@ def render_html(manifest: Dict[str, object]) -> str:
             <span class="pill priority-${{escapeHtml((paper.priority || "").toLowerCase())}}">级别 ${{escapeHtml(paper.priority || "-")}}</span>
             <span class="pill">${{escapeHtml(paper.arxiv_id)}}</span>
             <span class="pill read-state${{read ? " done" : ""}}">${{read ? "已读" : "未读"}}</span>
+            ${{intensive ? `<span class="pill intensive-state">精读</span>` : ""}}
           </div>
         `;
         row.append(body);
@@ -440,6 +951,7 @@ def render_html(manifest: Dict[str, object]) -> str:
       document.querySelector("#sourceLink").href = paper.pdf_path;
       document.querySelector("#pdfFrame").src = paper.pdf_path;
       renderReadToggle();
+      renderIntensiveToggle();
       renderList();
       const analysis = document.querySelector("#analysis");
       analysis.innerHTML = `<div class="empty">正在加载 ${{escapeHtml(paper.reading_id)}} 的分析...</div>`;
@@ -451,6 +963,7 @@ def render_html(manifest: Dict[str, object]) -> str:
       }} catch (error) {{
         analysis.innerHTML = `<div class="empty">无法加载分析文件：${{escapeHtml(error.message)}}<br>${{escapeHtml(paper.analysis_path)}}</div>`;
       }}
+      renderLeftMode();
     }}
     function renderMarkdown(markdown, basePath) {{
       const lines = markdown.replace(/\\r\\n/g, "\\n").split("\\n");
@@ -567,6 +1080,8 @@ def write_reading_dashboard(
                 "arxiv_id": str(item.get("arxiv_id") or "").strip(),
                 "read": bool(item.get("read")),
                 "read_at": str(item.get("read_at") or "").strip(),
+                "intensive": bool(item.get("intensive")),
+                "intensive_at": str(item.get("intensive_at") or "").strip(),
             }
         )
     status_payload["run_date"] = run_dir.name
@@ -576,14 +1091,40 @@ def write_reading_dashboard(
     return {"manifest": manifest_path, "dashboard": dashboard_path, "status": status_path}
 
 
+def refresh_cn_pdf_paths(manifest_path: Path) -> Dict[str, Path]:
+    run_dir = manifest_path.resolve().parent
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for paper in manifest.get("papers", []):
+        if not isinstance(paper, dict):
+            continue
+        paper["cn_pdf_path"] = find_cn_pdf(
+            run_dir,
+            str(paper.get("reading_id", "")),
+            str(paper.get("arxiv_id", "")),
+        )
+    manifest["generated_at"] = datetime.now(timezone.utc).isoformat()
+    arxiv_date = str(manifest.get("arxiv_date") or manifest_path.name.removeprefix("reading_manifest_").removesuffix(".json"))
+    dashboard_path = run_dir / f"reading_dashboard_{arxiv_date}.html"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    dashboard_path.write_text(render_html(manifest), encoding="utf-8")
+    return {"manifest": manifest_path, "dashboard": dashboard_path}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render reading dashboard from an analysis task.")
-    parser.add_argument("analysis_task", type=Path, help="llm_analysis_task_<scope>.md")
+    parser.add_argument("analysis_task", type=Path, nargs="?", help="llm_analysis_task_<scope>.md")
+    parser.add_argument("--refresh-manifest", type=Path, help="Refresh cn_pdf_path values in an existing reading manifest.")
     return parser.parse_args()
 
 
 def main() -> int:
-    raise SystemExit("Use write_reading_dashboard from process_selection.py.")
+    args = parse_args()
+    if args.refresh_manifest:
+        paths = refresh_cn_pdf_paths(args.refresh_manifest)
+        print(f"Reading manifest refreshed: {paths['manifest']}")
+        print(f"Reading dashboard refreshed: {paths['dashboard']}")
+        return 0
+    raise SystemExit("Use write_reading_dashboard from process_selection.py, or pass --refresh-manifest.")
 
 
 if __name__ == "__main__":

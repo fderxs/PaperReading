@@ -133,7 +133,11 @@ def rewrite_preference_jsonl(root: Path, run_date: str, arxiv_date: str, records
             if not line.strip():
                 continue
             item = json.loads(line)
-            if item.get("run_date") == run_date and item.get("arxiv_date") == arxiv_date:
+            if (
+                item.get("run_date") == run_date
+                and item.get("arxiv_date") == arxiv_date
+                and item.get("preference_stage") != "intensive_translation"
+            ):
                 continue
             existing.append(item)
 
