@@ -5,10 +5,13 @@ import argparse
 import json
 import os
 import re
+import ssl
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from render_reading_dashboard import write_reading_dashboard
@@ -17,6 +20,7 @@ from render_reading_dashboard import write_reading_dashboard
 USER_AGENT = "paperreading-post-selection/1.0 (+https://arxiv.org)"
 ROOT_DIR = Path(__file__).resolve().parent.parent
 PDF_HEADER = b"%PDF-"
+PDF_DOWNLOAD_RETRIES = 3
 
 
 def find_latest_run_dir(root: Path) -> Path:
@@ -204,13 +208,32 @@ def download_pdf(record: Dict[str, object], papers_dir: Path, timeout: int) -> P
         raise ValueError(f"Missing pdf_url for {arxiv_id or title}")
     if not pdf_url.endswith(".pdf"):
         pdf_url = f"{pdf_url}.pdf"
-    request = Request(
-        pdf_url,
-        headers={"User-Agent": USER_AGENT, "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.1"},
-    )
-    with urlopen(request, timeout=timeout) as response:
-        data = response.read()
-        content_type = str(response.headers.get("Content-Type", "")).lower()
+    last_error: Exception | None = None
+    for attempt in range(1, PDF_DOWNLOAD_RETRIES + 1):
+        request = Request(
+            pdf_url,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.1"},
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                data = response.read()
+                content_type = str(response.headers.get("Content-Type", "")).lower()
+            break
+        except (TimeoutError, URLError, OSError, ssl.SSLError) as exc:
+            last_error = exc
+            if attempt >= PDF_DOWNLOAD_RETRIES:
+                raise RuntimeError(
+                    f"Failed to download PDF for {arxiv_id or title} after "
+                    f"{PDF_DOWNLOAD_RETRIES} attempts: {exc}"
+                ) from exc
+            wait_seconds = min(2 ** (attempt - 1), 8)
+            print(
+                f"PDF download failed for {arxiv_id or title} "
+                f"(attempt {attempt}/{PDF_DOWNLOAD_RETRIES}); retrying in {wait_seconds}s: {exc}"
+            )
+            time.sleep(wait_seconds)
+    else:
+        raise RuntimeError(f"Failed to download PDF for {arxiv_id or title}: {last_error}")
 
     if not looks_like_pdf_bytes(data):
         raise RuntimeError(
@@ -322,7 +345,7 @@ def write_analysis_task(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Process selected paper JSON from the selector HTML.")
+    parser = argparse.ArgumentParser(description="Process selected paper JSON from the reading dashboard.")
     parser.add_argument("--root", type=Path, default=ROOT_DIR, help="PaperReading root directory.")
     parser.add_argument("--run-dir", type=Path, default=None, help="Run folder. Default: latest YYYY-MM-DD folder.")
     parser.add_argument("--selection", type=Path, default=None, help="Selected JSON path. Default: latest in run folder.")
