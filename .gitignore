@@ -2,5 +2,7 @@ tmp/
 runs/
 papers/
 data/
+docs/
+dashboard/
 */__pycache__/
 .DS_Store
