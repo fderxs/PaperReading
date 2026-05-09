@@ -226,7 +226,7 @@ if [[ -f "$log" ]] && grep -q "Overfull \\\\hbox" "$log"; then
   exit 4
 fi
 
-pdf="${base}.pdf"
+pdf="${{base}}.pdf"
 if [[ ! -f "$pdf" ]]; then
   pdf="$(find . -maxdepth 1 -name '*.pdf' | sort | head -n 1)"
 fi
@@ -237,7 +237,7 @@ if [[ -n "$pdf" ]]; then
   root_dir="$(cd ../../../../.. && pwd)"
   manifest="$(find "$run_dir" -maxdepth 1 -name 'reading_manifest_*.json' | sort | tail -n 1)"
   if [[ -n "$manifest" && -f "$root_dir/scripts/render_reading_dashboard.py" ]]; then
-    python3 "$root_dir/scripts/render_reading_dashboard.py" --refresh-manifest "$manifest"
+    "${{PYTHON_BIN:-python3}}" "$root_dir/scripts/render_reading_dashboard.py" --refresh-manifest "$manifest"
   fi
 fi
 """,

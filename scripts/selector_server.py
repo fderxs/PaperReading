@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Serve selector HTML from a single run directory and save normalized selection JSON."""
+"""Serve the reading dashboard and persist local reading/selection state."""
 
 import argparse
 import base64
 import json
+import mimetypes
 import os
 import re
 import tempfile
@@ -11,11 +12,13 @@ from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, List
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 ARXIV_SCOPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:_to_\d{4}-\d{2}-\d{2})?$")
+RUN_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PRIORITY_VALUES = {"", "A", "B", "C"}
+CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 
 
 def validate_arxiv_scope(value: object) -> str:
@@ -27,9 +30,16 @@ def validate_arxiv_scope(value: object) -> str:
     return scope
 
 
+def validate_run_date(value: object, default: str) -> str:
+    run_date = str(value or default).strip() or default
+    if not RUN_DATE_RE.fullmatch(run_date):
+        raise ValueError(f"Invalid run_date value: {run_date}")
+    return run_date
+
+
 def normalize_selection_payload(payload: Dict[str, object], run_dir: Path) -> Dict[str, object]:
     arxiv_date = validate_arxiv_scope(payload.get("arxiv_date"))
-    run_date = str(payload.get("run_date") or run_dir.name).strip() or run_dir.name
+    run_date = validate_run_date(payload.get("run_date"), run_dir.name)
 
     raw_selected = payload.get("selected_papers", [])
     if not isinstance(raw_selected, list):
@@ -98,19 +108,15 @@ def write_json_atomic(path: Path, payload: Dict[str, object]) -> None:
     os.replace(temp_path, path)
 
 
-def find_latest_selector_html(run_dir: Path) -> Path:
-    matches = sorted(
-        run_dir.glob("vla_planning_selector_*.html"),
-        key=lambda path: (path.stat().st_mtime, path.name),
-    )
-    if not matches:
-        raise FileNotFoundError(f"No selector HTML found in {run_dir}")
-    return matches[-1]
-
-
 class SelectorRequestHandler(SimpleHTTPRequestHandler):
     run_dir: Path
     root_dir: Path
+
+    def _send_error_quietly(self, code: int, message: str) -> None:
+        try:
+            self.send_error(code, message)
+        except CLIENT_DISCONNECT_ERRORS:
+            return
 
     def do_GET(self) -> None:
         if self.path.startswith("/selection-status"):
@@ -128,19 +134,34 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/papers/"):
             self._handle_paper_file()
             return
+        if self.path.startswith("/runs/"):
+            self._handle_run_file()
+            return
         super().do_GET()
 
     def do_HEAD(self) -> None:
         if self.path.startswith("/papers/"):
             self._handle_paper_file(send_body=False)
             return
+        if self.path.startswith("/runs/"):
+            self._handle_run_file(send_body=False)
+            return
         super().do_HEAD()
+
+    def _resolve_run_dir(self, raw_run_date: object | None = None) -> Path:
+        run_date = validate_run_date(raw_run_date, self.run_dir.name)
+        target = (self.root_dir / "runs" / run_date).resolve()
+        runs_dir = (self.root_dir / "runs").resolve()
+        if target.parent != runs_dir or not target.exists():
+            raise FileNotFoundError(run_date)
+        return target
 
     def _handle_selection_status(self) -> None:
         try:
             query = parse_qs(urlparse(self.path).query)
             arxiv_date = validate_arxiv_scope(query.get("arxiv_date", [""])[0])
-            output_path = self.run_dir / f"selected_vla_planning_papers_{arxiv_date}.json"
+            run_dir = self._resolve_run_dir(query.get("run_date", [self.run_dir.name])[0])
+            output_path = run_dir / f"selected_vla_planning_papers_{arxiv_date}.json"
             body = json.dumps(
                 {"ok": True, "exists": output_path.exists(), "path": str(output_path)},
                 ensure_ascii=False,
@@ -162,7 +183,8 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
         try:
             query = parse_qs(urlparse(self.path).query)
             arxiv_date = validate_arxiv_scope(query.get("arxiv_date", [""])[0])
-            status_path = self.run_dir / f"reading_status_{arxiv_date}.json"
+            run_dir = self._resolve_run_dir(query.get("run_date", [self.run_dir.name])[0])
+            status_path = run_dir / f"reading_status_{arxiv_date}.json"
             status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.exists() else {}
             body = json.dumps(
                 {"ok": True, "exists": status_path.exists(), "path": str(status_path), "status": status},
@@ -203,13 +225,48 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
                     if not chunk:
                         break
                     self.wfile.write(chunk)
+        except CLIENT_DISCONNECT_ERRORS:
+            return
         except Exception as exc:
-            self.send_error(404, str(exc))
+            self._send_error_quietly(404, str(exc))
+
+    def _handle_run_file(self, send_body: bool = True) -> None:
+        try:
+            raw_path = unquote(urlparse(self.path).path)
+            parts = raw_path.lstrip("/").split("/", 2)
+            if len(parts) != 3 or parts[0] != "runs":
+                raise ValueError("Invalid run file path")
+            run_dir = self._resolve_run_dir(parts[1])
+            relative_path = parts[2]
+            if not relative_path or relative_path.startswith("/") or "\\" in relative_path:
+                raise ValueError("Invalid run file path")
+            target = (run_dir / relative_path).resolve()
+            if not str(target).startswith(str(run_dir) + os.sep) or not target.is_file():
+                raise FileNotFoundError(relative_path)
+            content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+            data_size = target.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(data_size))
+            self.end_headers()
+            if not send_body:
+                return
+            with target.open("rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except CLIENT_DISCONNECT_ERRORS:
+            return
+        except Exception as exc:
+            self._send_error_quietly(404, str(exc))
 
     def _handle_cn_pdf_info(self) -> None:
         try:
             query = parse_qs(urlparse(self.path).query)
-            pdf_path = self._resolve_cn_pdf_path(query.get("path", [""])[0])
+            run_dir = self._resolve_run_dir(query.get("run_date", [self.run_dir.name])[0])
+            pdf_path = self._resolve_cn_pdf_path(query.get("path", [""])[0], run_dir)
             try:
                 import fitz  # type: ignore
             except ImportError as exc:
@@ -239,7 +296,8 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
     def _handle_cn_pdf_page(self) -> None:
         try:
             query = parse_qs(urlparse(self.path).query)
-            pdf_path = self._resolve_cn_pdf_path(query.get("path", [""])[0])
+            run_dir = self._resolve_run_dir(query.get("run_date", [self.run_dir.name])[0])
+            pdf_path = self._resolve_cn_pdf_path(query.get("path", [""])[0], run_dir)
             page_index = int(query.get("page", ["0"])[0])
             zoom = float(query.get("zoom", ["1.45"])[0])
             zoom = min(2.4, max(0.5, zoom))
@@ -281,9 +339,10 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            normalized = normalize_selection_payload(payload, self.run_dir)
+            run_dir = self._resolve_run_dir(payload.get("run_date"))
+            normalized = normalize_selection_payload(payload, run_dir)
             arxiv_date = normalized["arxiv_date"]
-            output_path = self.run_dir / f"selected_vla_planning_papers_{arxiv_date}.json"
+            output_path = run_dir / f"selected_vla_planning_papers_{arxiv_date}.json"
             write_json_atomic(output_path, normalized)
         except Exception as exc:
             body = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8")
@@ -301,15 +360,22 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _resolve_cn_pdf_path(self, raw_path: object) -> Path:
+    def _resolve_cn_pdf_path(self, raw_path: object, run_dir: Path | None = None) -> Path:
+        run_dir = run_dir or self.run_dir
         rel_path = str(raw_path or "").strip()
         if not rel_path:
             raise ValueError("Missing PDF path")
+        if rel_path.startswith("/runs/"):
+            parts = rel_path.lstrip("/").split("/", 2)
+            if len(parts) != 3:
+                raise ValueError("Invalid PDF path")
+            run_dir = self._resolve_run_dir(parts[1])
+            rel_path = parts[2]
         if rel_path.startswith("/") or "\\" in rel_path:
             raise ValueError("PDF path must be relative")
 
-        target = (self.run_dir / rel_path).resolve()
-        paper_cn_dir = (self.run_dir / "paper_cn").resolve()
+        target = (run_dir / rel_path).resolve()
+        paper_cn_dir = (run_dir / "paper_cn").resolve()
         if target.name != "paper_cn.pdf":
             raise ValueError("Only paper_cn.pdf can be overwritten")
         if target.parent == paper_cn_dir or not str(target).startswith(str(paper_cn_dir) + os.sep):
@@ -324,7 +390,8 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
             if length > 120 * 1024 * 1024:
                 raise ValueError("Request body too large")
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            target = self._resolve_cn_pdf_path(payload.get("path"))
+            run_dir = self._resolve_run_dir(payload.get("run_date"))
+            target = self._resolve_cn_pdf_path(payload.get("path"), run_dir)
             pdf_base64 = str(payload.get("pdf_base64") or "")
             if "," in pdf_base64:
                 pdf_base64 = pdf_base64.split(",", 1)[1]
@@ -365,6 +432,7 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             arxiv_date = validate_arxiv_scope(payload.get("arxiv_date"))
+            run_dir = self._resolve_run_dir(payload.get("run_date"))
             raw_read_papers = payload.get("read_papers", [])
             if not isinstance(raw_read_papers, list):
                 raise ValueError("read_papers must be a list")
@@ -386,12 +454,12 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
                 )
 
             normalized = {
-                "run_date": str(payload.get("run_date") or self.run_dir.name).strip() or self.run_dir.name,
+                "run_date": run_dir.name,
                 "arxiv_date": arxiv_date,
                 "updated_at": str(payload.get("updated_at") or "").strip(),
                 "read_papers": read_papers,
             }
-            output_path = self.run_dir / f"reading_status_{arxiv_date}.json"
+            output_path = run_dir / f"reading_status_{arxiv_date}.json"
             write_json_atomic(output_path, normalized)
         except Exception as exc:
             body = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8")
@@ -413,7 +481,7 @@ class SelectorRequestHandler(SimpleHTTPRequestHandler):
 def make_handler(run_dir: Path, root_dir: Path) -> type[SelectorRequestHandler]:
     class Handler(SelectorRequestHandler):
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=str(run_dir), **kwargs)
+            super().__init__(*args, directory=str(root_dir), **kwargs)
 
     Handler.run_dir = run_dir
     Handler.root_dir = root_dir
@@ -421,7 +489,7 @@ def make_handler(run_dir: Path, root_dir: Path) -> type[SelectorRequestHandler]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Serve selector HTML and save selection JSON.")
+    parser = argparse.ArgumentParser(description="Serve reading dashboard HTML and save local state JSON.")
     parser.add_argument("--run-dir", type=Path, required=True, help="Date folder to serve and write selected JSON into.")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind. Default: 127.0.0.1")
     parser.add_argument("--port", type=int, default=8765, help="Port to bind. Default: 8765")
@@ -433,20 +501,17 @@ def main() -> int:
     run_dir = args.run_dir.resolve()
     root_dir = run_dir.parent.parent if run_dir.parent.name == "runs" else Path.cwd().resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-    selector_html = find_latest_selector_html(run_dir)
 
     handler = make_handler(run_dir, root_dir)
     server = ThreadingHTTPServer((args.host, args.port), handler)
-    url = f"http://{args.host}:{args.port}/{selector_html.name}"
-    print(f"Serving selector directory: {run_dir}")
-    print(f"Saving selected JSON into: {run_dir}")
-    print(f"Open selector from: {url}")
-    print("Press Ctrl-C after saving your selection.")
+    print(f"Serving project root: {root_dir}")
+    print(f"Saving local JSON state into: {run_dir}")
+    print("Press Ctrl-C when done.")
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nSelector server stopped.")
+        print("\nDashboard server stopped.")
     finally:
         server.server_close()
     return 0
