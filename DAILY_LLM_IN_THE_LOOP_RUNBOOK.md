@@ -119,38 +119,38 @@ data/summary_zh_cache.json
 data/institutions_cache.json
 ```
 
-### 3. 渲染选择器 HTML
+### 3. 渲染 reading dashboard
 
 Codex 运行：
 
 ```bash
-python3 scripts/render_selector.py runs/YYYY-MM-DD/shortlist_vla_planning_<arxiv-scope>.json
+python3 scripts/render_reading_dashboard.py --shortlist runs/YYYY-MM-DD/shortlist_vla_planning_<arxiv-scope>.json
 ```
 
 预期产物：
 
 ```text
-runs/YYYY-MM-DD/vla_planning_selector_<arxiv-scope>.html
+dashboard/reading_dashboard.html
 ```
 
-### 4. 启动本地选择器并暂停等待用户
+### 4. 启动本地 dashboard 并暂停等待用户
 
 Codex 运行：
 
 ```bash
-./serve_selector.sh --run-dir runs/YYYY-MM-DD
+./start_dashboard.sh --run-dir runs/YYYY-MM-DD
 ```
 
 脚本会输出本地 URL，例如：
 
 ```text
-http://127.0.0.1:8765/vla_planning_selector_<arxiv-scope>.html
+http://127.0.0.1:8765/dashboard/reading_dashboard.html
 ```
 
 Codex 此时应暂停，并明确告诉用户：
 
 ```text
-请打开上面的 URL，给想深入了解的论文设置优先级或备注，然后点击“保存/覆盖 JSON”。保存成功后告诉我“继续”。
+请打开上面的 URL，在“论文挑选”视图里给想深入了解的论文设置优先级或备注，然后点击“保存选择”。保存成功后告诉我“继续”。
 ```
 
 用户保存后，预期产物：
@@ -177,7 +177,7 @@ papers/*.pdf
 runs/YYYY-MM-DD/selection_record_<arxiv-scope>.json
 runs/YYYY-MM-DD/analyses/*.md
 runs/YYYY-MM-DD/llm_analysis_task_<arxiv-scope>.md
-runs/YYYY-MM-DD/reading_dashboard_<arxiv-scope>.html
+dashboard/reading_dashboard.html
 runs/YYYY-MM-DD/reading_manifest_<arxiv-scope>.json
 runs/YYYY-MM-DD/reading_status_<arxiv-scope>.json
 ```
@@ -269,22 +269,39 @@ runs/YYYY-MM-DD/figures/
 精读分析完成后，Codex 可继续使用同一个本地 server：
 
 ```bash
-./serve_selector.sh --run-dir runs/YYYY-MM-DD
+./start_dashboard.sh --run-dir runs/YYYY-MM-DD
 ```
 
-然后让用户打开：
+脚本会自动选择可用端口并打开，URL 形如：
 
 ```text
-http://127.0.0.1:8765/reading_dashboard_<arxiv-scope>.html
+http://127.0.0.1:8765/dashboard/reading_dashboard.html
 ```
 
-阅读台列表页显示用户选中的论文列表，包括统一阅读 ID、arXiv ID、优先级、已读/未读和精读状态。用户点击论文后进入阅读页，右侧显示英文 PDF 原文，左侧可在 `analyses/*.md` 分析文档和中文 PDF 之间切换。已读和精读状态会保存在：
+阅读台是唯一交互入口。标题页左侧有历史归档目录，按 `runs/YYYY-MM-DD/` 自动整理为日期、月份和年份；点击日期、月份或年份会显示对应范围内的论文。列表页显示用户选中的论文列表，包括统一阅读 ID、arXiv ID、优先级、主题标签、已读/未读和精读状态，并支持按关键词、优先级和主题标签筛选。
+
+阅读台顶部可以切换“阅读列表”和“论文挑选”。论文挑选视图直接读取对应日期的 `shortlist_vla_planning_<arxiv-scope>.json`，可设置 A/B/C 级别和备注，并保存回：
+
+```text
+runs/YYYY-MM-DD/selected_vla_planning_papers_<arxiv-scope>.json
+```
+
+因此，历史选择和当天选择都在同一个全局 `dashboard/reading_dashboard.html` 完成。`runs/YYYY-MM-DD/` 只保留数据、manifest、status、分析和论文相关产物，不再保存 dashboard HTML。
+
+用户点击论文后进入阅读页，右侧显示英文 PDF 原文，左侧可在 `analyses/*.md` 分析文档和中文 PDF 之间切换。已读和精读状态会保存在：
 
 ```text
 runs/YYYY-MM-DD/reading_status_<arxiv-scope>.json
 ```
 
 用户后续提问时可直接引用阅读 ID，例如 `R03`。
+
+主题标签来源：
+
+- `shortlist_vla_planning_<arxiv-scope>.json` 中每篇论文的 `tags`。
+- 分析文档中 `论文定位` 表格的 `方向` 字段。
+
+渲染阅读台时会使用固定标签池做归一，例如 VLA、规划/长时程、世界模型、数据集/基准、可靠性/安全、机器人操作等，每篇最多展示 3 个主题标签。源数据里未进入固定池的新标签不会自动出现在页面；如果确实需要新增主题标签，先向用户说明拟新增标签和理由，确认后再修改标签池。当前状态文件仍使用 JSON：`reading_status_*.json`、`selected_vla_planning_papers_*.json` 和 dashboard 内嵌索引已经足够小、可人工审查，暂不引入数据库。
 
 ### 9. 继续处理精读翻译
 
@@ -336,6 +353,22 @@ python3 -m pip install PyMuPDF
 - 阅读台 HTML 和阅读状态 JSON 位置。
 - 如处理了精读翻译，汇报 `paper_cn/` 工作目录和中文 PDF 编译结果。
 - 是否存在未完成项或需要用户确认的问题。
+
+## 定期清理
+
+当 `tmp/` 或 LaTeX 编译辅助文件变多时，Codex 应先 dry-run：
+
+```bash
+./cleanup_run_artifacts.sh
+```
+
+确认只包含可重新生成的临时产物后，再执行：
+
+```bash
+./cleanup_run_artifacts.sh --apply
+```
+
+默认清理范围包括 `tmp/arxiv_html_*`、`tmp/arxiv_src_*`、`tmp/pdf_text`、`tmp/pdf-overflow-check`、`tmp/latex-test`、`tmp/docling_probe`、`tmp/pycache`，以及 `runs/` 下的 LaTeX 辅助文件如 `.aux`、`.log`、`.out`、`.fls`、`.fdb_latexmk`、`.xdv`。对于超过 30 天且已有 `analyses/*.md` 的 run，还会删除未被分析文档引用的 `figures/` 和 `tables/` 文件；可用 `--unused-artifact-days N` 调整阈值。不要删除分析 Markdown、阅读台 HTML、原始 PDF、中文 PDF 正本、`data/` 长期状态或 `tmp/docling_models/`，除非用户明确要求。
 
 ## 常用触发语
 
