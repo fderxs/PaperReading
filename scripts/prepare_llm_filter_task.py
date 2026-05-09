@@ -3,19 +3,118 @@
 
 import argparse
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from xml.etree import ElementTree as ET
 
-from render_selector import (
-    ROOT_DIR,
-    arxiv_id_from_pdf_url,
-    classify_paper,
-    fetch_arxiv_metadata,
-    load_institutions_cache,
-    load_summary_zh_cache,
-    reason_from_tags,
+ROOT_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT_DIR / "data"
+SUMMARY_ZH_CACHE = DATA_DIR / "summary_zh_cache.json"
+INSTITUTIONS_CACHE = DATA_DIR / "institutions_cache.json"
+USER_AGENT = "paperreading-dashboard/1.0 (+https://arxiv.org/list/cs.RO/recent)"
+ARXIV_API = "https://export.arxiv.org/api/query"
+VLA_RE = re.compile(r"\b(VLA|vision[-\s]?language[-\s]?action)\b", re.I)
+PLANNING_RE = re.compile(
+    r"\b(planning|planner|motion planning|world model|model[-\s]?predictive|"
+    r"trajectory|long[-\s]?horizon|action synthesis|temporal logic)\b",
+    re.I,
 )
+BENCHMARK_RE = re.compile(r"\b(dataset|benchmark|bench|evaluation|test)\b", re.I)
+SAFETY_RE = re.compile(r"\b(calibration|uncertainty|failure|safe|safety|robust)\b", re.I)
+EMBODIED_RE = re.compile(
+    r"\b(embodied|manipulation|robotic autonomy|foundation model|cross[-\s]?embodiment)\b",
+    re.I,
+)
+
+
+def arxiv_id_from_pdf_url(pdf_url: str) -> str:
+    match = re.search(r"/pdf/([^/?#]+)", pdf_url)
+    if not match:
+        return ""
+    return match.group(1).removesuffix(".pdf")
+
+
+def chunked(values: List[str], size: int) -> List[List[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def fetch_arxiv_metadata(arxiv_ids: List[str], timeout: int) -> Dict[str, Dict[str, object]]:
+    metadata: Dict[str, Dict[str, object]] = {}
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+    for batch in chunked(arxiv_ids, 50):
+        url = f"{ARXIV_API}?{urlencode({'id_list': ','.join(batch), 'max_results': len(batch)})}"
+        request = Request(url, headers={"User-Agent": USER_AGENT})
+        with urlopen(request, timeout=timeout) as response:
+            root = ET.fromstring(response.read())
+
+        for entry in root.findall("atom:entry", ns):
+            raw_id = entry.findtext("atom:id", default="", namespaces=ns).rsplit("/", 1)[-1]
+            arxiv_id = re.sub(r"v\d+$", "", raw_id)
+            title = " ".join(entry.findtext("atom:title", default="", namespaces=ns).split())
+            summary = " ".join(entry.findtext("atom:summary", default="", namespaces=ns).split())
+            authors = [
+                author.findtext("atom:name", default="", namespaces=ns)
+                for author in entry.findall("atom:author", ns)
+            ]
+            metadata[arxiv_id] = {"title": title, "summary": summary, "authors": authors}
+
+    return metadata
+
+
+def load_summary_zh_cache() -> Dict[str, str]:
+    if not SUMMARY_ZH_CACHE.exists():
+        return {}
+    return json.loads(SUMMARY_ZH_CACHE.read_text(encoding="utf-8"))
+
+
+def load_institutions_cache() -> Dict[str, str]:
+    if not INSTITUTIONS_CACHE.exists():
+        return {}
+    return json.loads(INSTITUTIONS_CACHE.read_text(encoding="utf-8"))
+
+
+def classify_paper(title: str, summary: str) -> Dict[str, object]:
+    text = f"{title}\n{summary}"
+    score = 0
+    tags: List[str] = []
+
+    if VLA_RE.search(text):
+        score += 10
+        tags.append("VLA")
+    if PLANNING_RE.search(text):
+        score += 8
+        tags.append("Planning")
+    if "world model" in text.lower():
+        score += 4
+        tags.append("World Model")
+    if EMBODIED_RE.search(text):
+        score += 4
+        tags.append("具身/机器人")
+    if SAFETY_RE.search(text):
+        score += 3
+        tags.append("可靠性/安全")
+    if BENCHMARK_RE.search(text):
+        score += 2
+        tags.append("数据集/基准")
+
+    return {"score": score, "tags": list(dict.fromkeys(tags))}
+
+
+def reason_from_tags(tags: List[str]) -> str:
+    if "VLA" in tags and "Planning" in tags:
+        return "同时涉及 VLA 与规划/长时程决策，是高优先级候选。"
+    if "VLA" in tags:
+        return "直接涉及 VLA 或视觉-语言-动作模型，符合当前筛选主线。"
+    if "Planning" in tags or "World Model" in tags:
+        return "直接涉及具身规划、运动规划或 world model，符合当前筛选主线。"
+    if "数据集/基准" in tags:
+        return "包含数据集、基准或评测信息，可作为 VLA/规划方向参考。"
+    return "关键词相关，建议快速浏览后决定是否深入。"
 
 
 def load_json(path: Path) -> Dict[str, object]:
@@ -95,7 +194,7 @@ def render_task(package: Dict[str, object], root: Path, metadata_path: Path, sho
     preference_path = root / "data" / "paper_preference_records.jsonl"
     summary_cache = root / "data" / "summary_zh_cache.json"
     institution_cache = root / "data" / "institutions_cache.json"
-    selector_path = run_dir / f"vla_planning_selector_{arxiv_date}.html"
+    dashboard_path = root / "dashboard" / "reading_dashboard.html"
 
     rows = []
     for paper in package.get("papers", []):
@@ -114,7 +213,7 @@ def render_task(package: Dict[str, object], root: Path, metadata_path: Path, sho
 
     return f"""# LLM-in-the-loop 筛选任务：{target_date_label}
 
-本文件由脚本自动生成，没有调用任何大模型 API。请把这个任务交给当前 Codex/Cursor 对话里的我来完成筛选与 HTML 生成。
+本文件由脚本自动生成，没有调用任何大模型 API。请把这个任务交给当前 Codex/Cursor 对话里的我来完成筛选，并生成唯一入口 reading dashboard。
 {metadata_note}
 ## 输入文件
 
@@ -130,17 +229,19 @@ def render_task(package: Dict[str, object], root: Path, metadata_path: Path, sho
 2. 关注范围：VLA、具身规划 Planning、World Model、长时程任务、机器人/具身智能相关综述、数据集、测试基准、评测与可靠性文章。
 3. 生成或覆盖最终 shortlist：`{shortlist_path}`。
 4. 如果补充了中文摘要或机构信息，同步更新 `data/summary_zh_cache.json` 和 `data/institutions_cache.json`。
-5. 运行下面命令渲染选择器 HTML：
+5. 运行下面命令渲染 reading dashboard：
 
 ```bash
-python3 scripts/render_selector.py "{shortlist_path}"
+python3 scripts/render_reading_dashboard.py --shortlist "{shortlist_path}"
 ```
 
-6. 完成后告诉用户打开选择器：
+6. 完成后告诉用户打开 reading dashboard：
 
 ```bash
-./serve_selector.sh --run-dir "{run_dir}"
+./start_dashboard.sh --run-dir "{run_dir}"
 ```
+
+预期 HTML：`{dashboard_path}`。
 
 ## shortlist JSON 格式要求
 

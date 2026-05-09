@@ -95,5 +95,5 @@ echo "Next step:"
 echo "Ask Codex to complete the LLM-in-the-loop filtering task:"
 echo "$TASK_PATH"
 echo
-echo "After Codex generates the selector HTML, run:"
-echo "./serve_selector.sh --run-dir \"$RUN_DIR\""
+echo "After Codex renders the reading dashboard, run:"
+echo "./start_dashboard.sh --run-dir \"$RUN_DIR\""
