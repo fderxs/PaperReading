@@ -199,10 +199,11 @@ def render_task(package: Dict[str, object], root: Path, metadata_path: Path, sho
     rows = []
     for paper in package.get("papers", []):
         rows.append(
-            "| {raw_paper_id} | {heuristic_score} | {tags} | {title} |".format(
+            "| {raw_paper_id} | {heuristic_score} | {tags} | {institutions} | {title} |".format(
                 raw_paper_id=escape_table(paper.get("raw_paper_id", "")),
                 heuristic_score=escape_table(paper.get("heuristic_score", "")),
                 tags=escape_table(", ".join(paper.get("heuristic_tags", []))),
+                institutions=escape_table(paper.get("institutions") or "待补充"),
                 title=escape_table(paper.get("title", "")),
             )
         )
@@ -228,14 +229,15 @@ def render_task(package: Dict[str, object], root: Path, metadata_path: Path, sho
 1. 读取元数据包和历史偏好记录，结合你的关注方向进行筛选。
 2. 关注范围：VLA、具身规划 Planning、World Model、长时程任务、机器人/具身智能相关综述、数据集、测试基准、评测与可靠性文章。
 3. 生成或覆盖最终 shortlist：`{shortlist_path}`。
-4. 如果补充了中文摘要或机构信息，同步更新 `data/summary_zh_cache.json` 和 `data/institutions_cache.json`。
-5. 运行下面命令渲染 reading dashboard：
+4. 对进入 shortlist 的每篇论文补全 `institutions` 字段，并同步更新 `data/institutions_cache.json`。机构处理方法见下方“机构补全规则”。
+5. 如果补充了中文摘要，同步更新 `data/summary_zh_cache.json`。
+6. 运行下面命令渲染 reading dashboard：
 
 ```bash
 python3 scripts/render_reading_dashboard.py --shortlist "{shortlist_path}"
 ```
 
-6. 完成后告诉用户打开 reading dashboard：
+7. 完成后告诉用户打开 reading dashboard：
 
 ```bash
 ./start_dashboard.sh --run-dir "{run_dir}"
@@ -278,10 +280,27 @@ python3 scripts/render_reading_dashboard.py --shortlist "{shortlist_path}"
 }}
 ```
 
+## 机构补全规则
+
+机构信息对用户筛选很重要。对 shortlist 中的论文，Codex 必须按以下顺序处理：
+
+1. 先查 `data/institutions_cache.json`，已有缓存直接使用。
+2. 缓存没有时，优先查看 arXiv abstract 页面上的 `HTML` / `HTML (experimental)` 链接，或直接访问 `https://ar5iv.labs.arxiv.org/html/<arxiv_id>` / `https://ar5iv.org/html/<arxiv_id>`，只读取页面开头作者区的 affiliation。
+3. 若 arXiv HTML/ar5iv 不可用，可用论文标题或 arXiv ID 查询 Semantic Scholar、OpenAlex、Google Scholar 等学术元数据页面，只记录能明确确认的机构。
+4. 如果 1-3 都无法快速、可靠确认，`institutions` 写 `"待补充"`，不要编造或从作者当前主页推断。
+5. 成功确认后，把 `data/institutions_cache.json` 更新为 `{{"<arxiv_id>": "机构1; 机构2"}}` 这类简单映射。
+
+禁止事项：
+
+- 不要为了机构信息下载 PDF。
+- 不要为了机构信息下载 `https://arxiv.org/e-print/<arxiv_id>` 源码。
+- 不要为了机构信息创建或保存 `tmp/institution_src_probe`、`tmp/arxiv_src_*` 等源码探测目录。
+- arXiv 源码下载只允许出现在后续“精读全文翻译”流程中，不属于初筛机构补全。
+
 ## 候选论文速览
 
-| 原始编号 | 启发式分数 | 启发式标签 | 标题 |
-|---|---:|---|---|
+| 原始编号 | 启发式分数 | 启发式标签 | 已缓存机构 | 标题 |
+|---|---:|---|---|---|
 {table}
 """
 

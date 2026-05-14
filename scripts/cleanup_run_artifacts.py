@@ -12,6 +12,7 @@ from typing import Iterable, List, Set
 TMP_PATTERNS = [
     "arxiv_html_*",
     "arxiv_src_*",
+    "institution_src_probe",
     "pdf_text",
     "pdf-overflow-check",
     "latex-test",

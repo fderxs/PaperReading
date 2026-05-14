@@ -119,6 +119,21 @@ data/summary_zh_cache.json
 data/institutions_cache.json
 ```
 
+机构信息对用户筛选很重要。Codex 必须对进入 `shortlist` 的论文补全 `institutions` 字段，处理顺序如下：
+
+1. 先查 `data/institutions_cache.json`，已有缓存直接使用。
+2. 缓存没有时，优先查看 arXiv abstract 页面右侧的 `HTML` / `HTML (experimental)`，或直接访问 `https://ar5iv.labs.arxiv.org/html/<arxiv_id>` / `https://ar5iv.org/html/<arxiv_id>`，只读取页面开头作者区的 affiliation。
+3. 若 arXiv HTML/ar5iv 不可用，可用论文标题或 arXiv ID 查询 Semantic Scholar、OpenAlex、Google Scholar 等学术元数据页面，只记录能明确确认的机构。
+4. 如果无法快速、可靠确认，`institutions` 写 `"待补充"`，不要编造，不要从作者当前主页推断。
+5. 成功确认后，把 `data/institutions_cache.json` 更新为 `{"<arxiv_id>": "机构1; 机构2"}` 这类简单映射。
+
+禁止事项：
+
+- 不要为了机构信息下载 PDF。
+- 不要为了机构信息下载 `https://arxiv.org/e-print/<arxiv_id>` 源码。
+- 不要为了机构信息创建或保存 `tmp/institution_src_probe`、`tmp/arxiv_src_*` 等源码探测目录。
+- arXiv 源码下载只允许出现在后续“精读全文翻译”流程中，不属于初筛机构补全。
+
 ### 3. 渲染 reading dashboard
 
 Codex 运行：

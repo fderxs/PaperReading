@@ -34,6 +34,8 @@
 
 Codex 会生成或更新 `shortlist_vla_planning_<arxiv-scope>.json`，并渲染全局唯一入口 `dashboard/reading_dashboard.html`。
 
+初筛时 `institutions` 字段必须尽量补全。处理顺序是：先用 `data/institutions_cache.json`，再看 arXiv HTML/ar5iv 页面作者区，必要时查 Semantic Scholar/OpenAlex/Google Scholar 等学术元数据页；无法确认就写 `待补充`。不要为了机构下载 PDF、arXiv e-print 源码，或创建 `tmp/institution_src_probe` 这类源码探测目录。
+
 3. 打开 reading dashboard 并保存选择：
 
 ```bash
